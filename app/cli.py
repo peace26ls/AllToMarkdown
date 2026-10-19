@@ -54,13 +54,42 @@ def build_document(input_path: Path, mode: str):
     return doc, info
 
 
+def organize_document_with_llm(doc):
+    """在提取结果上运行 LLM 整理层（Phase 2）。
+
+    返回整理后的 Document（直接修改 blocks）。LLM 整理失败会回退到
+    规则提取的原始块，并把告警附加到 doc.notes，不中断流程。
+    """
+    from app.core.llm import OpenAIProvider, complete_json
+    from app.core.organize import organize_document
+
+    provider = OpenAIProvider()
+    # 适配器：organize 层协议 llm_call(system, user) -> dict
+    llm_call = lambda system, user: complete_json(provider, user, system=system)
+
+    print(f"      调用 LLM 整理（{provider.name}）...")
+    result = organize_document(doc, llm_call)
+    doc.blocks = result.blocks
+    if result.chunks_unorganized:
+        doc.notes.append(
+            f"organize: {result.chunks_unorganized} 个 chunk 整理失败，已保留规则提取的原始块"
+        )
+    for item in result.meta:
+        doc.notes.append(f"organize[{item.get('chunk_id', '')}]: {item.get('message', '')}")
+    return doc
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="alltomd",
-        description="把 Word(.docx) 与 PDF 文档提取整理为 Markdown 文件（Phase 1 纯规则 MVP）",
+        description="把 Word(.docx) 与 PDF 文档提取整理为 Markdown 文件",
     )
     parser.add_argument("input", type=Path, help="输入的 .docx 或 .pdf 文件")
     parser.add_argument("-o", "--output", type=Path, default=None, help="输出 .md 文件路径")
+    parser.add_argument(
+        "-O", "--organize", action="store_true",
+        help="调用 LLM 整理层（Phase 2），需配置 OPENAI_API_KEY",
+    )
     parser.add_argument(
         "--mode",
         choices=["standard", "high_quality"],
@@ -80,6 +109,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[1/3] 识别文件类型: {input_path.name}")
         doc, info = build_document(input_path, args.mode)
         print(f"      识别为 {doc.detected_kind}，共 {len(doc.blocks)} 个内容块")
+
+        if args.organize:
+            organize_document_with_llm(doc)
+            print(f"      整理后 {len(doc.blocks)} 个内容块")
 
         print("[2/3] 渲染 Markdown ...")
         from app.core.render import render_document

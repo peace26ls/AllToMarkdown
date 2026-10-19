@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AllToMarkdown · 纸墨转换</title>
+<meta name="description" content="把 Word 与 PDF 文档批量提取、整理为清晰 Markdown 的 AI 工具" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='5' y='3' width='22' height='26' rx='3' fill='%23e8e2d5' stroke='%230e7c74' stroke-width='1.6'/%3E%3Cpath d='M11 10h10M11 15h10M11 20h6' stroke='%230e7c74' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;700;900&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<!-- 顶栏 -->
+<header class="topbar">
+  <div class="shell topbar__inner">
+    <a class="brand" href="/" aria-label="AllToMarkdown 首页">
+      <span class="brand__mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="26" height="26"><rect x="5" y="3" width="22" height="26" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 10h10M11 15h10M11 20h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </span>
+      <span class="brand__text">AllToMarkdown</span>
+      <span class="brand__sub">纸墨转换台</span>
+    </a>
+    <nav class="topbar__nav" aria-label="页面内导航">
+      <a href="#workspace">工作台</a>
+      <a href="#history">最近任务</a>
+    </nav>
+  </div>
+</header>
+
+<main class="shell page">
+
+  <!-- Hero / 品牌语 -->
+  <section class="hero">
+    <p class="hero__eyebrow" data-reveal>DOCX · PDF → Markdown</p>
+    <h1 class="hero__title" data-reveal data-reveal-delay="60">
+      把散落的纸页，<br class="br-lg"/>落成 <em>干净的排印</em>。
+    </h1>
+    <p class="hero__lead" data-reveal data-reveal-delay="120">
+      上传 Word 或 PDF，自动提取标题、段落、表格与图片，
+      可选 LLM 结构化整理，输出一份清晰可读的 Markdown。
+    </p>
+  </section>
+
+  <!-- 工作台 / 上传区 -->
+  <section class="workspace" id="workspace">
+    <div class="panel upload-panel" data-reveal data-reveal-delay="180">
+
+      <!-- 拖拽上传 -->
+      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="上传文档">
+        <input type="file" id="fileInput" accept=".docx,.pdf" hidden />
+        <div class="dropzone__icon" aria-hidden="true">
+          <svg viewBox="0 0 48 48" width="40" height="40"><path d="M24 6v22M14 18l10-10 10 10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 30v8a4 4 0 0 0 4 4h24a4 4 0 0 0 4-4v-8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        </div>
+        <p class="dropzone__title">拖入文档，或 <span class="dropzone__cta">点击选择</span></p>
+        <p class="dropzone__hint">支持 .docx 与 .pdf · 图片将自动落盘引用</p>
+        <p class="dropzone__file" id="fileLabel" hidden></p>
+      </div>
+
+      <!-- 选项 -->
+      <div class="options">
+        <label class="opt" title="PDF 扫描件暂不可用，文字版 PDF 走标准提取">
+          <span class="opt__label">模式</span>
+          <span class="seg" role="radiogroup" aria-label="转换模式">
+            <button type="button" class="seg__btn is-active" data-seg="standard">标准</button>
+            <button type="button" class="seg__btn" data-seg="high_quality" disabled>高质量</button>
+          </span>
+        </label>
+        <label class="opt opt--switch" for="organize">
+          <span class="opt__label">LLM 整理 <span class="opt__pill">可选</span></span>
+          <span class="toggle">
+            <input type="checkbox" id="organize" />
+            <span class="toggle__track"><span class="toggle__knob"></span></span>
+          </span>
+          <span class="opt__note">需配置 OPENAI_API_KEY</span>
+        </label>
+      </div>
+
+      <button class="btn btn--primary" id="convertBtn" disabled>开始转换</button>
+      <p class="form-error" id="formError" hidden></p>
+
+      <!-- 进度 -->
+      <div class="progress" id="progress" hidden>
+        <div class="progress__meta">
+          <span class="progress__step" id="stepLabel">正在提取内容…</span>
+          <span class="progress__pct" id="progressPct">0%</span>
+        </div>
+        <div class="progress__track"><div class="progress__bar" id="progressBar"></div></div>
+      </div>
+    </div>
+
+    <!-- 结果区 -->
+    <section class="result" id="result" hidden aria-live="polite">
+      <div class="result__head">
+        <div>
+          <h2 class="result__title">转换完成</h2>
+          <p class="result__meta" id="resultMeta"></p>
+        </div>
+        <div class="result__actions">
+          <a class="btn btn--ghost" id="dlMd" download>下载 .md</a>
+          <a class="btn btn--ghost" id="dlZip" download>下载压缩包</a>
+        </div>
+      </div>
+
+      <div class="result__grid">
+        <!-- 预览 -->
+        <div class="panel preview" id="preview">
+          <div class="panel__label">纸页预览</div>
+          <article class="preview__body markdown" id="previewBody">
+            <p class="preview__loading">正在加载…</p>
+          </article>
+          <details class="preview__raw">
+            <summary>查看原始 Markdown</summary>
+            <pre class="preview__rawcode" id="rawCode"></pre>
+          </details>
+        </div>
+
+        <!-- 校对清单 -->
+        <aside class="panel sidebar">
+          <div class="panel__label">校对清单</div>
+          <ul class="review" id="reviewList">
+            <li class="review__empty">暂无低置信内容，全文可直接采用。</li>
+          </ul>
+          <div class="sidemeta">
+            <div class="sidemeta__row"><span>来源类型</span><b id="mKind">—</b></div>
+            <div class="sidemeta__row"><span>内容块</span><b id="mBlocks">—</b></div>
+            <div class="sidemeta__row"><span>耗时</span><b id="mElapsed">—</b></div>
+            <div class="sidemeta__row"><span>LLM 整理</span><b id="mOrganize">—</b></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </section>
+
+  <!-- 历史任务 -->
+  <section class="history" id="history" data-reveal>
+    <div class="history__head">
+      <h2 class="section-title">最近任务</h2>
+      <button class="linkish" id="refreshHist">刷新</button>
+    </div>
+    <ul class="history__list" id="historyList">
+      <li class="history__empty">还没有任务。</li>
+    </ul>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="shell foot__inner">
+    <span>AllToMarkdown — 本地优先的文档 → Markdown 工作台</span>
+    <span class="foot__dot">·</span>
+    <span>提取·整理·渲染 三段式流水线</span>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
