@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 环境变量
+.env
+
+# 运行时任务产物
+tasks/*/
+!tasks/.gitkeep
+
+# 测试运行产物（夹具源文件 sample.docx / sample.pdf 保留）
+tests/fixtures/images/
+tests/fixtures/output*.md
+tests/fixtures/out_*.md
+tests/fixtures/_dbg*/
+
+# 其他
+.DS_Store
+Thumbs.db
