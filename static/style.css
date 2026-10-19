@@ -153,10 +153,12 @@ body::before {
   color: var(--amber); border: 1px solid rgba(192,122,33,.4); border-radius: 999px; padding: 2px 8px;
 }
 .opt__note { font-size: .76rem; color: var(--ink-faint); min-height: 1.1em; }
+/* 模式说明单独占一行（.options 是两列网格） */
+.options > .opt__note { grid-column: 1 / -1; margin: -6px 0 0; }
 .opt--switch { justify-content: flex-start; }
 
 /* 分段控制器 */
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; width: fit-content; }
+.seg { display: inline-flex; flex-wrap: wrap; max-width: 100%; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; width: fit-content; }
 .seg__btn {
   border: 0; background: transparent; padding: 9px 18px; font-family: var(--sans);
   font-size: .9rem; color: var(--ink-soft); cursor: pointer; transition: all .2s;

@@ -94,7 +94,9 @@ class Document(BaseModel):
 
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:10])
     source_file: str
-    mode: Literal["standard", "high_quality"] = "standard"
+    # 运行模式：standard=规则提取；ocr=扫描件 OCR（Phase 4）；
+    # high_quality=多模态视觉模型按页转换（Phase 4）
+    mode: Literal["standard", "high_quality", "ocr"] = "standard"
     detected_kind: Literal["docx", "pdf_text", "pdf_scanned", "unknown"] = "unknown"
     blocks: list[Block] = Field(default_factory=list)
     # 提取器能力元信息：用了哪些链路、有无降级，供 meta.json 与 UI 展示

@@ -21,9 +21,36 @@ router = APIRouter(prefix="/api")
 _SAFE_NAME_RE = re.compile(r"[^0-9A-Za-z\u4e00-\u9fff_.\-]")
 
 
+_MODES = ("standard", "high_quality", "ocr")
+
+
 def _safe_filename(name: str) -> str:
     base = _SAFE_NAME_RE.sub("_", name or "document")
     return base[:120] or "document"
+
+
+@router.get("/capabilities")
+async def capabilities() -> JSONResponse:
+    """返回服务端可选能力，前端据此启用/禁用「OCR」「高质量」入口。
+
+    - ocr：本地 PaddleOCR 是否安装可用（未安装时前端应给出安装提示而非报错）
+    - vision：是否配置了 LLM key（多模态走同一个 OpenAI 兼容端点）
+    """
+    from app.core.ocr import ocr_available
+
+    ocr_ok, ocr_reason = ocr_available()
+    import os
+
+    llm_ready = bool(os.getenv("OPENAI_API_KEY"))
+    return JSONResponse({
+        "modes": list(_MODES),
+        "ocr": {"available": ocr_ok, "reason": ocr_reason},
+        "vision": {
+            "available": llm_ready,
+            "reason": "已配置 OPENAI_API_KEY" if llm_ready else "未配置 OPENAI_API_KEY，无法调用视觉模型",
+        },
+        "vision_max_pages": int(os.getenv("VISION_MAX_PAGES", "0")) or None,
+    })
 
 
 @router.post("/tasks")
@@ -36,8 +63,11 @@ async def create_task(
 
     ATTENTION：为支持前端轮询，这里不阻塞等结果，任务在后台线程运行。
     """
-    if mode not in ("standard", "high_quality"):
-        raise HTTPException(status_code=400, detail="mode 仅支持 standard / high_quality")
+    if mode not in _MODES:
+        raise HTTPException(
+            status_code=400,
+            detail="mode 仅支持 standard / high_quality（多模态）/ ocr（扫描件 OCR）",
+        )
 
     # 先把上传文件保存到任务目录，保证任务执行时磁盘可读
     raw = await file.read()

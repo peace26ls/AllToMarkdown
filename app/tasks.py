@@ -33,6 +33,10 @@ CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.7"))
 class TaskStatus(str, Enum):
     PENDING = "pending"
     EXTRACTING = "extracting"
+    # Phase 4：扫描件 OCR（本地 PaddleOCR）
+    OCR = "ocr"
+    # Phase 4：多模态「高质量模式」（按页调用视觉模型）
+    VISION = "vision"
     ORGANIZING = "organizing"
     RENDERING = "rendering"
     DONE = "done"
@@ -148,18 +152,47 @@ def list_tasks(limit: int = 20) -> list[dict]:
 # 主执行流程（在独立线程中运行）
 # ---------------------------------------------------------------------------
 
+def _vision_extract(input_path: Path, detected_kind: str, mode: str):
+    """多模态「高质量模式」：逐页渲染成图送视觉模型。"""
+    from app.core import vision
+    from app.core.llm import OpenAIProvider, make_vision_call
+
+    provider = OpenAIProvider()
+    doc = vision.extract(
+        input_path,
+        vision_call=make_vision_call(provider),
+        mode=mode,
+        max_pages=int(os.getenv("VISION_MAX_PAGES", "0")) or None,
+    )
+    # detected_kind 以 ingest 结论为准（扫描件/文字版由预检决定）
+    doc.detected_kind = detected_kind
+    doc.notes.append(f"vision: provider={provider.name}")
+    return doc
+
+
+def _ocr_extract(input_path: Path, mode: str):
+    """扫描件 OCR：本地 PaddleOCR（未安装时 ocr.extract 会给出清晰报错）。"""
+    from app.core import ocr
+
+    return ocr.extract(input_path, mode=mode, dpi=int(os.getenv("OCR_DPI", "150")))
+
+
 def _extract_doc(input_path: Path, output_dir: Path, mode: str):
     from app.core import extract_docx, extract_pdf
 
     info = inspect(input_path)
+
+    # 高质量模式对文字版与扫描件都适用（模型直接"看"页面）
+    if mode == "high_quality":
+        return _vision_extract(input_path, info.detected_kind.value, mode), info
+
+    if mode == "ocr" or info.detected_kind == DetectedKind.PDF_SCANNED:
+        return _ocr_extract(input_path, mode), info
+
     if info.detected_kind == DetectedKind.DOCX:
         doc = extract_docx.extract(input_path, output_dir=output_dir)
     elif info.detected_kind == DetectedKind.PDF_TEXT:
         doc = extract_pdf.extract(input_path, output_dir=output_dir)
-    elif info.detected_kind == DetectedKind.PDF_SCANNED:
-        raise RuntimeError(
-            "未检测到文字层，该 PDF 疑似为扫描件。请使用「高质量模式」（Phase 4）或提供文字版 PDF。"
-        )
     else:
         raise RuntimeError(f"不支持的文件类型或无法识别: {info.message}")
     doc.mode = mode
@@ -235,10 +268,21 @@ def run_task(tid: str) -> None:
         return
     start = _now()
     try:
-        _set(task, status=TaskStatus.EXTRACTING, progress=15, step_label="正在提取内容…")
+        if task.mode == "high_quality":
+            step = "多模态识别中（按页计费）…"
+            phase = TaskStatus.VISION
+        elif task.mode == "ocr":
+            step = "OCR 识别扫描件…"
+            phase = TaskStatus.OCR
+        else:
+            step = "正在提取内容…"
+            phase = TaskStatus.EXTRACTING
+        _set(task, status=phase, progress=15, step_label=step)
 
         doc, info = _extract_doc(task.input_path, task.dir, task.mode)
-        _set(task, status=TaskStatus.EXTRACTING, progress=55, blocks=len(doc.blocks),
+        # OCR / 多模态链路内部不做阈值回填，这里统一处理（幂等）
+        doc.finalize(CONFIDENCE_THRESHOLD)
+        _set(task, status=phase, progress=55, blocks=len(doc.blocks),
              detected_kind=doc.detected_kind, step_label="提取完成，正在等待整理/渲染…")
         task.notes.extend(doc.notes)
 

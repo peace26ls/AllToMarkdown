@@ -314,3 +314,65 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 - **LLM 整理需 OPENAI_API_KEY**：未配置时 organize 会走到失败回退（保留原始块），不影响 standard 提取。
 - **扫描件（PDF 无文字层）**：Phase 1-3 给出清晰报错，OCR 链路留待 Phase 4（PaddleOCR）。
 - **「高质量模式」**：目前 UI 已展示但 disabled，需 Phase 4 多模态 LLM 落地。
+
+---
+
+## 13. Phase 4 实现进度（2026-10-19 完成 ✅）
+
+范围：扫描件 OCR（PaddleOCR）+ 多模态「高质量模式」。
+
+### 13.1 新增模块
+
+| 文件 | 职责 |
+|---|---|
+| `app/core/ocr.py` | OCR 引擎抽象 `OcrEngine` + `PaddleOcrEngine` + PyMuPDF 页面渲染 + 几何聚合（行/段/标题） |
+| `app/core/vision.py` | 逐页渲染 → 视觉模型 → Markdown → Block；按页计费、逐页容错 |
+| `app/core/llm.py`（扩展） | `LLMProvider.complete_vision` + `make_vision_call` 适配器（上层不碰 SDK） |
+
+### 13.2 关键决策
+
+1. **OCR 引擎做成抽象而非直接依赖 paddle**：paddle 体积大、Windows 易踩坑，
+   抽象后未安装也能跑测试与运行其余功能，`ocr_available()` 给 UI/API 清晰降级提示。
+2. **页面渲染复用 PyMuPDF**：不引入 poppler / pdf2image / ghostscript。
+3. **OCR 无字号信息 → 用文本框高度代理字号**做标题推断；段落按垂直间距切分；
+   复用 `extract_pdf._smart_join` 修中文断行空格。
+4. **置信度如实下调**：块级取行内最低分并 -0.05，低分自然进入复核清单。
+5. **paddleocr 结果形态做双向兼容**：3.x（`dict` 的 rec_texts/rec_scores/rec_polys）
+   与 2.x（`[[poly,(text,score)]]`）都能归一化，2.x 的 `[None]` 空页不崩。
+6. **高质量模式只让模型输出纯净 Markdown**，再由本地解析器转 Block ——
+   与"LLM 不接触最终渲染"的一贯原则一致，下游 organize/render/前端零改动。
+7. **逐页容错**：单页失败只跳过并记 note，只有全页失败才抛错（避免一次抖动毁掉整份文档）。
+
+### 13.3 踩坑记录（Windows + paddlepaddle 3.3.1）
+
+默认启用 oneDNN 时推理必崩：
+`NotImplementedError: (Unimplemented) ConvertPirAttribute2RuntimeAttribute not support
+[pir::ArrayAttribute<pir::DoubleAttribute>] (onednn_instruction.cc:118)`。
+`FLAGS_use_mkldnn=0` 环境变量**无效**；有效解是构造时传 **`enable_mkldnn=False`**，
+已在 `PaddleOcrEngine._build` 中以"逐级回退"方式固化（3.x 完整签名 → 3.x 精简 → 2.x）。
+
+另注：轻量替代 `rapidocr-onnxruntime` 最新版声明 `requires_python <3.13`，
+在本项目 Python 3.13 环境**装不上**，故维持交接文档的 PaddleOCR 选型。
+
+### 13.4 真实验证结果
+
+- 依赖：`paddlepaddle 3.3.1`（cp313 win_amd64）+ `paddleocr 3.7.0` 安装成功，模型 PP-OCRv6
+- 2 页中文扫描件（0 字符文字层）→ 4 个块：H1「实验报告：材料拉伸测试」、正文段、
+  H1「结果分析」、正文段，块置信度 0.95，耗时约 185s（含首次模型加载）
+- Web 链路：`POST /api/tasks mode=ocr` → 状态 `ocr` → `done`，markdown/meta 正常
+- API：`GET /api/capabilities` 返回 `ocr.available=true`、`vision.available=false`（无 key）
+- 未配 key 走 high_quality → `failed` 且错误明确指向"未配置 OPENAI_API_KEY"
+
+### 13.5 测试
+
+- `tests/test_ocr.py`（15 用例）、`tests/test_vision.py`（8 用例），
+  全部用假引擎/假 provider 注入，**不依赖 paddle 与网络**
+- 真实 OCR 冒烟：`RUN_REAL_OCR=1 pytest tests/test_ocr.py -k real`
+- 全量：`62 passed, 1 skipped`
+
+### 13.6 遗留
+
+- OCR 只做行级聚合，**扫描件中的表格会退化成连续段落**；表格还原走高质量模式
+- CPU OCR 慢（单页数十秒），长扫描件建议先抽页
+- 高质量模式未做端到端实测：目标端点 `modelsq.gdufs.edu.cn` 可达（DNS 解析成功、
+  HTTPS 返回 301）但为 nginx 门户，`/v1/models` 同样 301，**缺少可用 API 路径与 key**

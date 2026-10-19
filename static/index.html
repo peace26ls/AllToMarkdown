@@ -61,13 +61,15 @@
 
       <!-- 选项 -->
       <div class="options">
-        <label class="opt" title="PDF 扫描件暂不可用，文字版 PDF 走标准提取">
+        <label class="opt">
           <span class="opt__label">模式</span>
           <span class="seg" role="radiogroup" aria-label="转换模式">
             <button type="button" class="seg__btn is-active" data-seg="standard">标准</button>
             <button type="button" class="seg__btn" data-seg="high_quality" disabled>高质量</button>
+            <button type="button" class="seg__btn" data-seg="ocr" disabled>扫描件 OCR</button>
           </span>
         </label>
+        <p class="opt__note" id="modeHint">标准：规则提取，最快，适合 Word 与文字版 PDF。</p>
         <label class="opt opt--switch" for="organize">
           <span class="opt__label">LLM 整理 <span class="opt__pill">可选</span></span>
           <span class="toggle">

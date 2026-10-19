@@ -41,14 +41,45 @@
     unknown: "未知",
   };
 
+  var modeHint = document.getElementById("modeHint");
+
   var STEP_LABEL = {
     extracting: "正在提取内容…",
+    ocr: "OCR 识别扫描件…",
+    vision: "多模态识别中（按页计费）…",
     organizing: "LLM 结构化整理中…",
     rendering: "渲染 Markdown…",
     done: "完成",
     failed: "失败",
     pending: "排队中",
   };
+
+  // 各模式的说明文案（切换模式时展示，避免用户误用高成本模式）
+  var MODE_HINT = {
+    standard: "标准：规则提取，最快，适合 Word 与文字版 PDF。",
+    high_quality: "高质量：逐页渲染送视觉模型，按页计费，适合复杂版式与扫描件。",
+    ocr: "扫描件 OCR：本地 PaddleOCR 识别无文字层 PDF，CPU 较慢（首次需加载模型）。",
+  };
+
+  // 服务端能力（OCR / 视觉模型是否可用），决定模式按钮能否点击
+  function applyCapabilities(caps) {
+    setSegAvailability("high_quality", caps.vision);
+    setSegAvailability("ocr", caps.ocr);
+  }
+
+  function setSegAvailability(mode, info) {
+    var btn = document.querySelector('.seg__btn[data-seg="' + mode + '"]');
+    if (!btn || !info) return;
+    btn.disabled = !info.available;
+    btn.title = info.reason || "";
+  }
+
+  function loadCapabilities() {
+    fetch("/api/capabilities", { headers: { "Cache-Control": "no-cache" } })
+      .then(function (r) { return r.json(); })
+      .then(applyCapabilities)
+      .catch(function () { /* 服务不可用：保持禁用 */ });
+  }
 
   // ---- 文件选择 ----
   function pickFile(file) {
@@ -111,9 +142,11 @@
   var currentMode = "standard";
   segButtons.forEach(function (btn) {
     btn.addEventListener("click", function () {
+      if (btn.disabled) return;
       segButtons.forEach(function (b) { b.classList.remove("is-active"); });
       btn.classList.add("is-active");
       currentMode = btn.getAttribute("data-seg");
+      if (modeHint) modeHint.textContent = MODE_HINT[currentMode] || "";
     });
   });
 
@@ -273,7 +306,8 @@
           historyList.appendChild(li);
           return;
         }
-        var STATUS = { pending: "排队", extracting: "提取中", organizing: "整理中", rendering: "渲染中", done: "完成", failed: "失败" };
+        var STATUS = { pending: "排队", extracting: "提取中", ocr: "OCR", vision: "多模态",
+                       organizing: "整理中", rendering: "渲染中", done: "完成", failed: "失败" };
         tasks.forEach(function (t) {
           var li = document.createElement("li");
           li.className = "history__item";
@@ -322,6 +356,7 @@
       var delay = parseInt(el.getAttribute("data-reveal-delay") || "0", 10);
       setTimeout(function () { el.classList.add("is-revealed"); }, delay);
     });
+    loadCapabilities();
     loadHistory();
   });
 })();

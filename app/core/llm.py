@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -32,6 +33,17 @@ class LLMProvider(ABC):
     def complete(self, user: str, *, system: str | None = None,
                  temperature: float = 0.2, max_tokens: int | None = None) -> str:
         """发起一次补全，返回模型输出的原始文本。"""
+
+    def complete_vision(self, user: str, images: list[bytes], *,
+                        system: str | None = None,
+                        temperature: float = 0.2,
+                        max_tokens: int | None = None) -> str:
+        """多模态补全：把图片与文字一起送模型，返回模型输出文本。
+
+        默认不支持（普通文本模型没有视觉能力）；子类实现后即可用于
+        Phase 4 的「高质量模式」。显式 raise 便于调用方降级而不是静默出错。
+        """
+        raise LLMError(f"{self.name} 不支持多模态（vision）输入")
 
     @property
     @abstractmethod
@@ -92,6 +104,40 @@ class OpenAIProvider(LLMProvider):
             raise LLMError("LLM 返回空内容")
         return content
 
+    def complete_vision(self, user: str, images: list[bytes], *,
+                        system: str | None = None,
+                        temperature: float = 0.2,
+                        max_tokens: int | None = None) -> str:
+        """OpenAI 兼容的 vision 补全：图片以 base64 data URI 随消息发送。"""
+        client = self._get_client()
+        content: list[dict] = [{"type": "text", "text": user}]
+        for img in images:
+            b64 = base64.b64encode(img).decode("ascii")
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{b64}"},
+            })
+
+        messages: list[dict] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": content})
+
+        try:
+            resp = client.chat.completions.create(
+                model=self._model,
+                messages=messages,  # type: ignore[arg-type]
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except Exception as exc:  # noqa: BLE001 网络/鉴权/限流/模型不支持视觉
+            raise LLMError(f"多模态调用失败: {exc}") from exc
+
+        out: str | None = resp.choices[0].message.content if resp.choices else None
+        if not out:
+            raise LLMError("多模态返回空内容")
+        return out
+
     @property
     def name(self) -> str:
         return f"openai:{self._model}"
@@ -131,3 +177,26 @@ def complete_json(provider: LLMProvider, user: str, *,
             if attempt >= retries:
                 break
     raise LLMError(f"LLM JSON 调用重试 {retries} 次仍失败: {last_err}")
+
+
+def make_vision_call(provider: LLMProvider, *, retries: int = 1):
+    """构造多模态调用适配器：``call(system, user, images) -> str``。
+
+    与 organize 层的 llm_call 适配器同构：让上层（vision.py）只依赖
+    本项目定义的协议，不直接 touch openai SDK，便于测试注入 FakeProvider。
+    单页失败自动重试 ``retries`` 次，仍失败则抛 LLMError（上层按页跳过）。
+    """
+    def _call(system: str, user: str, images: list[bytes]) -> str:
+        last_err: Exception | None = None
+        for attempt in range(retries + 1):
+            try:
+                return provider.complete_vision(
+                    user, images, system=system, temperature=0.0
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+                if attempt >= retries:
+                    break
+        raise LLMError(f"多模态调用重试 {retries} 次仍失败: {last_err}")
+
+    return _call

@@ -30,15 +30,36 @@ def build_document(input_path: Path, mode: str):
     """
     info = inspect(input_path)
 
-    if info.detected_kind == DetectedKind.DOCX:
+    if mode == "high_quality":
+        # Phase 4：多模态高质量模式（逐页调用视觉模型，按页计费）
+        from app.core.llm import OpenAIProvider, make_vision_call
+        from app.core.vision import extract as vision_extract
+
+        provider = OpenAIProvider()
+        doc = vision_extract(
+            input_path,
+            vision_call=make_vision_call(provider),
+            mode=mode,
+            max_pages=int(os.getenv("VISION_MAX_PAGES", "0")) or None,
+        )
+        doc.detected_kind = info.detected_kind.value
+        doc.notes.append(f"ingest: {info.message}")
+    elif info.detected_kind == DetectedKind.PDF_SCANNED and mode == "ocr":
+        # Phase 4：扫描件 OCR（PaddleOCR）
+        from app.core.ocr import extract as ocr_extract
+
+        doc = ocr_extract(input_path, mode=mode, dpi=int(os.getenv("OCR_DPI", "150")))
+        doc.notes.append(f"ingest: {info.message}")
+    elif info.detected_kind == DetectedKind.DOCX:
         doc = extract_docx.extract(input_path, output_dir=input_path.parent)
     elif info.detected_kind == DetectedKind.PDF_TEXT:
         doc = extract_pdf.extract(input_path, output_dir=input_path.parent)
     elif info.detected_kind == DetectedKind.PDF_SCANNED:
-        # Phase 1 无 OCR：给出清晰报错而非崩溃
+        # 扫描件但未指定 OCR 模式：给出清晰指引而非崩溃
         raise RuntimeError(
             "未检测到文字层，该 PDF 疑似为扫描件。"
-            "Phase 1 尚不支持 OCR，可改用「高质量模式」或等待 Phase 4 的 OCR 链路。"
+            "请加 --mode ocr 使用本地 OCR（需 paddleocr），"
+            "或 --mode high_quality 使用多模态识别。"
         )
     else:
         raise RuntimeError(f"不支持的文件类型或无法识别: {info.message}")
@@ -92,9 +113,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--mode",
-        choices=["standard", "high_quality"],
+        choices=["standard", "high_quality", "ocr"],
         default="standard",
-        help="运行模式（Phase 2 起 high_quality 有完整实现）",
+        help=(
+            "运行模式：standard=规则提取（默认，最快）；"
+            "high_quality=多模态视觉模型逐页转换（按页计费，适合复杂版式/扫描件）；"
+            "ocr=本地 PaddleOCR 识别扫描件 PDF"
+        ),
     )
     args = parser.parse_args(argv)
 
